@@ -64,6 +64,7 @@
     <button id="whisperBtn" style="display:none">🧠 음성인식 켜기</button>
     <button id="skipBtn" style="display:none">건너뛰기 ▶</button>
     <button id="restartBtn" style="display:none">🔄 다시 시작</button>
+    <button id="ttsTest" style="display:none">🔊 음성테스트</button>
   </div>
   <div class="small" id="modeNote" style="margin-top:8px"></div>
 </main>
@@ -489,6 +490,12 @@ $("#skipBtn").addEventListener("click", ()=>{
   if (step && step.who==='pilot'){ stopListening(); advancePilot(applyVars(step.text,VARS)); }
 });
 $("#restartBtn").addEventListener("click", start);
+$("#ttsTest").addEventListener("click", ()=>{
+  const vs=(window.speechSynthesis&&window.speechSynthesis.getVoices())||[];
+  const en=vs.filter(v=>/^en/i.test(v.lang)).map(v=>v.name);
+  modeNoteEl.textContent=`🔊 voices ${vs.length}개 / en: ${en.slice(0,3).join(', ')||'없음'} / iOS:${IS_IOS}`;
+  speak('Test. one two three. Cheongju tower.');
+});
 $("#atisBtn").addEventListener("click", ()=>{
   const t=atisText(VARS);
   if (atisEl.style.display==="block"){ atisEl.style.display="none"; }
@@ -516,10 +523,11 @@ whisperBtn.addEventListener("click", async ()=>{
 });
 
 /* ---- 시작 게이트 (iOS 오디오 잠금 해제) ---- */
+const IS_IOS=/iPad|iPhone|iPod/i.test(navigator.userAgent);
 $("#startGate").addEventListener("click", ()=>{
-  try{ window.speechSynthesis.speak(new SpeechSynthesisUtterance(' ')); }catch(e){} // iOS 오디오 잠금 해제
+  if (IS_IOS){ try{ window.speechSynthesis.speak(new SpeechSynthesisUtterance(' ')); }catch(e){} } // iOS만 오디오 잠금 해제
   $("#startGate").style.display="none";
-  micBtn.style.display=""; $("#skipBtn").style.display=""; $("#restartBtn").style.display="";
+  micBtn.style.display=""; $("#skipBtn").style.display=""; $("#restartBtn").style.display=""; $("#ttsTest").style.display="";
   micBtn.classList.add("primary");
   if (inputMode!=='speech') whisperBtn.style.display="";   // 음성인식 없는 폰엔 Whisper 옵션 제공
   modeNoteEl.textContent = inputMode==='speech'
