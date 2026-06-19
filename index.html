@@ -271,7 +271,7 @@ function atisText(v){
   if (a && a.real){
     return [
       `Cheongju International Airport information ${v.INFO}.`,
-      `Time ${(a.time||'').slice(-4)} zulu. Active runway ${v.RWY}.`,
+      `Time ${(a.time||'').slice(-4,-2)}00 zulu. Active runway ${v.RWY}.`,
       `Wind ${v.WDIR} at ${v.WSPD}.`,
       visPhrase(a.visM)?`Visibility ${visPhrase(a.visM)}.`:``,
       wxPhrase(a.wx)?`Present weather ${wxPhrase(a.wx)}.`:``,
