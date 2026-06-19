@@ -266,27 +266,29 @@ function visPhrase(v){ if(v==null) return ""; return v>=9999?"one zero kilometer
 const WXNAME={'-RA':'light rain','RA':'rain','+RA':'heavy rain','-SHRA':'light rain showers','SHRA':'rain showers','BR':'mist','FG':'fog','HZ':'haze','-SN':'light snow','SN':'snow','TS':'thunderstorm','DZ':'drizzle','-DZ':'light drizzle','FU':'smoke'};
 function wxPhrase(wx){ if(!wx||!wx.length) return ""; return wx.map(w=>WXNAME[w]||w).join(', '); }
 
-function atisText(v){
+function octaOf(c){ return {FEW:2,SCT:4,BKN:6,OVC:8,VV:8}[c]||0; }
+function skyLayers(cl){ if(!cl||!cl.length) return "clear"; return cl.map(x=>`${octaOf(x.cover)} octa ${Math.round(x.ht/1000)} thousand`).join(", "); }
+function atisText(v){   // 청주 ATIS SCRIPT 양식
   const a=v._ATIS;
   if (a && a.real){
+    const vis=visPhrase(a.visM), wx=wxPhrase(a.wx);
     return [
       `Cheongju International Airport information ${v.INFO}.`,
-      `Time ${(a.time||'').slice(-4,-2)}00 zulu. Active runway ${v.RWY}.`,
+      `Time ${(a.time||'').slice(-4,-2)}00 UTC. Active runway ${v.RWY}.`,
       `Wind ${v.WDIR} at ${v.WSPD}.`,
-      visPhrase(a.visM)?`Visibility ${visPhrase(a.visM)}.`:``,
-      wxPhrase(a.wx)?`Present weather ${wxPhrase(a.wx)}.`:``,
-      `${cloudPhrase(a.clouds)}.`,
-      `Temperature ${fmtT(a.temp)}, dew point ${fmtT(a.dew)}.`,
-      `QNH ${a.hPa} hectopascal, ${a.inHg} inches.`,
+      vis?`Visibility ${vis}${wx?' with '+wx:''}.`:(wx?`Visibility with ${wx}.`:``),
+      `Sky condition ${skyLayers(a.clouds)}.`,
+      `Temperature ${fmtT(a.temp)} centigrade, dew point ${fmtT(a.dew)}.`,
+      `Altimeter ${a.hPa} hectopascal, ${a.inHg} inches.`,
       `Advise you have information ${v.INFO}.`,
     ].filter(Boolean).join("\n");
   }
   return `Cheongju International Airport information ${v.INFO}.
-Time ${a.TIME} zulu. Active runway ${v.RWY}.
+Time ${a.TIME} UTC. Active runway ${v.RWY}.
 Wind ${v.WDIR} at ${v.WSPD}. Visibility ${a.VIS} thousand meters.
 Sky condition ${a.OCTA} octa ${a.CLOUD} thousand.
-Temperature ${a.TEMP}, dew point ${a.DEW}.
-QNH ${a.HPA} hectopascal, ${v.ALTIM} inches.
+Temperature ${a.TEMP} centigrade, dew point ${a.DEW}.
+Altimeter ${a.HPA} hectopascal, ${v.ALTIM} inches.
 Advise you have information ${v.INFO}.`;
 }
 
@@ -317,7 +319,7 @@ function toSpeech(t){
   t = t.replace(/(\d{3,4})\s*hectopascal/gi, (m,n)=> sd(n)+' hectopascal');
   t = t.replace(/\bVRB\b/g, 'variable');                               // 바람 가변
   t = t.replace(/\bwind\s+(\d{3})\s+at\s+(\d{1,2})/gi, (m,d,s)=> 'wind '+sd(d)+' at '+sd(s)); // 풍향풍속 개별
-  t = t.replace(/\b(\d{4})\s+zulu/gi, (m,n)=> sd(n)+' zulu');           // 시각 개별 (1413→one four one three)
+  t = t.replace(/\b(\d{4})\s+(zulu|UTC)/gi, (m,n,z)=> sd(n)+' '+z);     // 시각 개별 (1400→one four zero zero)
   t = t.replace(/\b([A-Z])\b/g, (m,L)=> NATO[L]||L);                    // 남은 단독 대문자(정보코드 등)
   return t;
 }
