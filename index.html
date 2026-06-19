@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>청주 VFR ATC Trainer</title>
+<style>
+  :root { --bg:#0e1116; --panel:#171c24; --line:#222a35; --me:#1f6feb; --atc:#2ea043; --muted:#8b97a7; --txt:#e6edf3; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--txt); }
+  header { padding:14px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  .pill { font-size:12px; color:var(--muted); background:var(--panel); border:1px solid var(--line); padding:3px 8px; border-radius:999px; }
+  main { max-width:780px; margin:0 auto; padding:16px; }
+  #vars { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+  #vars .v { font-size:12px; background:var(--panel); border:1px solid var(--line); padding:4px 9px; border-radius:6px; }
+  #vars .v b { color:#79c0ff; }
+  #atis { background:#1a1408; border:1px solid #4a3a12; border-radius:10px; padding:10px 13px; margin-bottom:12px; font-size:13px; line-height:1.5; white-space:pre-wrap; display:none; }
+  #log { min-height:240px; display:flex; flex-direction:column; gap:8px; margin-bottom:14px; }
+  .msg { max-width:84%; padding:9px 13px; border-radius:12px; line-height:1.45; font-size:15px; white-space:pre-wrap; }
+  .msg.atc { background:#10311c; border:1px solid #1c5631; align-self:flex-start; border-bottom-left-radius:3px; }
+  .msg.me  { background:#10243f; border:1px solid #1d4f8a; align-self:flex-end; border-bottom-right-radius:3px; }
+  .msg .who { font-size:11px; color:var(--muted); margin-bottom:2px; }
+  .hint { background:var(--panel); border:1px dashed var(--line); border-radius:10px; padding:12px 14px; margin-bottom:12px; }
+  .hint .lbl { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+  .hint .say { font-size:17px; margin-top:4px; line-height:1.45; }
+  .hint .say em { color:#f0883e; font-style:normal; font-weight:600; }
+  #heard { font-size:13px; color:var(--muted); min-height:18px; margin-top:6px; }
+  .controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  button { font:inherit; cursor:pointer; border:1px solid var(--line); background:var(--panel); color:var(--txt); padding:10px 16px; border-radius:9px; }
+  button.primary { background:var(--me); border-color:var(--me); font-weight:600; }
+  button.rec { background:#da3633; border-color:#da3633; }
+  button:disabled { opacity:.5; cursor:default; }
+  .small { font-size:12px; color:var(--muted); }
+  #done { display:none; text-align:center; padding:22px; color:var(--atc); font-size:18px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎧 청주 VFR ATC Trainer</h1>
+  <span class="pill" id="phaseName">VFR LOCAL</span>
+  <span class="pill" id="progress">0 / 0</span>
+  <span class="pill" id="status">대기</span>
+  <button id="atisBtn">📻 ATIS 보기/듣기</button>
+</header>
+
+<main>
+  <div id="vars"></div>
+  <div id="atis"></div>
+  <div id="log"></div>
+
+  <div class="hint" id="hintBox" style="display:none">
+    <div class="lbl">YOUR LINE (PILOT) — 이렇게 말하세요</div>
+    <div class="say" id="hintText">—</div>
+    <div id="heard"></div>
+  </div>
+
+  <div id="done">✅ 비행 완료! 수고하셨습니다. “다시 시작”을 누르면 새 활주로·새 숫자로 다시 연습합니다.</div>
+
+  <div class="controls">
+    <button class="primary" id="startGate">🎧 시작하기 (탭)</button>
+    <button class="primary" id="micBtn" style="display:none">🎤 말하기</button>
+    <button id="whisperBtn" style="display:none">🧠 음성인식 켜기</button>
+    <button id="skipBtn" style="display:none">건너뛰기 ▶</button>
+    <button id="restartBtn" style="display:none">🔄 다시 시작</button>
+  </div>
+  <div class="small" id="modeNote" style="margin-top:8px"></div>
+</main>
+
+<!-- ===== 브라우저 내 Whisper (transformers.js, 옵션) ===== -->
+<script type="module">
+  import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/+esm';
+  env.allowLocalModels = false;            // CDN(HF)에서 모델 로드
+  let asr = null;
+  window.loadWhisper = async (onProgress) => {
+    if (asr) return asr;
+    asr = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny.en', {
+      progress_callback: onProgress,
+    });
+    return asr;
+  };
+  window.whisperTranscribe = async (float32_16k) => {
+    const out = await asr(float32_16k);
+    return (out && out.text) ? out.text : '';
+  };
+</script>
+
+<script>
+/* ============================================================
+   1) 대본 (청주 VFR LOCAL FLIGHT — 한 바퀴 완결 시나리오)
+   who:'atc'(자동 음성재생) / 'pilot'(내가 말해야 진행, kw=판정 키워드)
+   {토큰}=세션마다 임의 생성, 끝까지 일관 사용 / p=현재 단계 라벨
+   ============================================================ */
+const SCRIPT = [
+  { p:"ENGINE START · GND 121.875", who:'pilot',
+    text:"청주 Ground, KVN 1138, at spot 73, request engine start up.",
+    kw:["ground","engine","start","request"] },
+  { who:'atc', text:"KVN 1138, engine start up approved." },
+  { who:'pilot', text:"Engine start approved, KVN 1138.", kw:["engine","start","approved"] },
+
+  { p:"TAXI · GND 121.875", who:'pilot',
+    text:"청주 Ground, KVN 1138, at spot 73, request taxi with information {INFO}.",
+    kw:["ground","taxi","request","information"] },
+  { who:'atc', text:"KVN 1138, runway {RWY} taxi via {TAXIVIA}, altimeter {ALTIM}." },
+  { who:'pilot', text:"Runway {RWY} taxi via {TAXIVIA}, altimeter {ALTIM}, KVN 1138.",
+    kw:["runway","taxi","altimeter"] },
+  { who:'atc', text:"KVN 1138, contact tower 118.7." },
+  { who:'pilot', text:"Contact tower 118.7, KVN 1138.", kw:["contact","tower"] },
+
+  { p:"TAKE-OFF · TWR 118.700", who:'pilot',
+    text:"청주 Tower, KVN 1138, approaching {INT} for runway {RWY}, request intersection departure for north westbound.",
+    kw:["tower","approaching","intersection","departure"] },
+  { who:'atc', text:"KVN 1138, runway {RWY} line up and wait." },
+  { who:'pilot', text:"Runway {RWY} line up and wait, KVN 1138.", kw:["line","up","wait"] },
+  { who:'atc', text:"KVN 1138, intersection departure approved at taxiway {TWY_INT}, runway {RWY}, wind {WDIR} at {WSPD}, cleared for takeoff." },
+  { who:'pilot', text:"Runway {RWY} cleared for takeoff, KVN 1138.", kw:["cleared","takeoff","runway"] },
+
+  { p:"AFTER AIRBORNE · TWR 118.700", who:'pilot',
+    text:"청주 Tower, KVN 1138, request right turn to north westbound.",
+    kw:["tower","right","turn","request"] },
+  { who:'atc', text:"KVN 1138, right turn approved, report oscar point." },
+  { who:'pilot', text:"Right turn approved, report oscar point, KVN 1138.", kw:["right","turn","approved","oscar"] },
+  { who:'pilot', text:"청주 Tower, KVN 1138, approaching oscar point, request frequency change.",
+    kw:["approaching","oscar","frequency","change"] },
+  { who:'atc', text:"KVN 1138, frequency change approved." },
+  { who:'pilot', text:"Frequency change approved, KVN 1138.", kw:["frequency","change","approved"] },
+
+  { p:"LOCAL FLIGHT · 와치맨 125.300", who:'pilot',
+    text:"와치맨, KVN 1138, {RADIAL} radial {MILE} mile from 청주 airport, maintain two thousand five hundred, request traffic advisory, 천안 local flight.",
+    kw:["radial","mile","maintain","traffic","advisory"] },
+  { who:'atc', text:"KVN 1138, squawk ident." },
+  { who:'pilot', text:"Squawk ident, KVN 1138.", kw:["squawk","ident"] },
+  { who:'atc', text:"KVN 1138, radar contact, copy maintain VFR." },
+  { who:'pilot', text:"Maintain VFR, KVN 1138.", kw:["maintain","vfr"] },
+
+  { p:"RTB · 와치맨 125.300", who:'pilot',
+    text:"와치맨, KVN 1138, {RADIAL} radial {MILE} mile from 청주 airport, three thousand five hundred, VFR inbound to 청주, request frequency change.",
+    kw:["radial","inbound","frequency","change"] },
+  { who:'atc', text:"KVN 1138, frequency change approved, maintain VFR." },
+  { who:'pilot', text:"Frequency change approved, maintain VFR, KVN 1138.", kw:["frequency","change","maintain"] },
+
+  { p:"INBOUND · TWR 118.700", who:'pilot',
+    text:"청주 Tower, KVN 1138, {RADIAL} radial {MILE} miles from 청주 airport, maintain three thousand, VFR inbound for full stop, with information {INFO}.",
+    kw:["tower","radial","inbound","full","stop"] },
+  { who:'atc', text:"KVN 1138, runway {RWY}, altimeter {ALTIM}, report oscar point." },
+  { who:'pilot', text:"Runway {RWY}, altimeter {ALTIM}, report oscar point, KVN 1138.",
+    kw:["runway","altimeter","oscar","report"] },
+  { who:'pilot', text:"청주 Tower, KVN 1138, over oscar point, three thousand.",
+    kw:["over","oscar","point"] },
+  { who:'atc', text:"KVN 1138, report downwind." },
+  { who:'pilot', text:"Report downwind, KVN 1138.", kw:["report","downwind"] },
+
+  { p:"ON PATTERN · TWR 118.700", who:'pilot',
+    text:"청주 Tower, KVN 1138, entering downwind.",
+    kw:["tower","entering","downwind"] },
+  { who:'atc', text:"KVN 1138, report base." },
+  { who:'pilot', text:"Report base, KVN 1138.", kw:["report","base"] },
+  { who:'pilot', text:"청주 Tower, KVN 1138, turning base for full stop runway {RWY}.",
+    kw:["turning","base","full","stop"] },
+  { who:'atc', text:"KVN 1138, runway {RWY}, wind {WDIR} at {WSPD}, cleared to land." },
+  { who:'pilot', text:"Runway {RWY} cleared to land, KVN 1138.", kw:["cleared","land","runway"] },
+
+  { p:"VACATE / TAXI · GND 121.875", who:'atc',
+    text:"KVN 1138, vacate runway via {VACATE} then contact ground." },
+  { who:'pilot', text:"Vacate runway via {VACATE} then contact ground, KVN 1138.",
+    kw:["vacate","runway","contact","ground"] },
+  { who:'pilot', text:"청주 Ground, KVN 1138, on {VACATE}, request taxi to ramp.",
+    kw:["ground","taxi","ramp","request"] },
+  { who:'atc', text:"KVN 1138, taxi to ramp via {RAMP}." },
+  { who:'pilot', text:"Taxi to ramp via {RAMP}, KVN 1138.", kw:["taxi","ramp"] },
+
+  { who:'atc', text:"KVN 1138, end of the flight. Good job!" },
+];
+
+/* ============================================================
+   2) 임의값 생성
+   ============================================================ */
+function rnd(a,b){ return Math.floor(Math.random()*(b-a+1))+a; }
+function pick(a){ return a[rnd(0,a.length-1)]; }
+const pad2 = n => String(n).padStart(2,"0");
+const pad3 = n => String(n).padStart(3,"0");
+
+function makeVars(){
+  const rwy = pick(["24R","06L"]);
+  const dep = rwy==="24R"
+    ? { TAXIVIA:"E1, B3", INT:"E1", TWY_INT:"B3", VACATE:"B3", RAMP:"E1" }
+    : { TAXIVIA:"E2, B4", INT:"E2", TWY_INT:"B4", VACATE:"B4", RAMP:"E2" };
+  const altim = (rnd(2975,3025)/100).toFixed(2);
+  const info  = String.fromCharCode(65 + rnd(0,25));
+  const temp = rnd(8,30), dew = temp - rnd(1,8);
+  return Object.assign({
+    RWY: rwy, ALTIM: altim, INFO: info,
+    WDIR: pad3(rnd(1,36)*10), WSPD: pad2(rnd(3,15)),
+    RADIAL: pad3(rnd(1,36)*10), MILE: pad2(rnd(5,22)),
+    _ATIS: { TIME: pad2(rnd(0,23))+pick(["00","30"]), VIS: rnd(8,10),
+             OCTA: rnd(1,7), CLOUD: rnd(2,9), TEMP: pad2(temp), DEW: pad2(dew),
+             HPA: rnd(1005,1025) },
+  }, dep);
+}
+function applyVars(text, v){ return text.replace(/\{(\w+)\}/g,(m,k)=> v[k]!==undefined?v[k]:m); }
+function atisText(v){
+  const a=v._ATIS;
+  return `Cheongju International Airport information ${v.INFO}.
+Time ${a.TIME} zulu. Active runway ${v.RWY}.
+Wind ${v.WDIR} at ${v.WSPD}. Visibility ${a.VIS} thousand meters.
+Sky condition ${a.OCTA} octa ${a.CLOUD} thousand.
+Temperature ${a.TEMP}, dew point ${a.DEW}.
+Altimeter ${a.HPA} hectopascal, ${v.ALTIM} inches.
+Advise you have information ${v.INFO}.`;
+}
+
+/* ============================================================
+   3) 음성: TTS(출력) + STT 두 경로
+      - Web Speech(안드로이드/PC Chrome): 실시간 인식
+      - Whisper(아이폰 등): 푸시투토크 녹음 → 브라우저에서 변환
+   ============================================================ */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recog = null;
+if (SR){ recog = new SR(); recog.lang="en-US"; recog.interimResults=true; recog.maxAlternatives=3; }
+
+// 음성 입력 모드: 'tap'(기본) | 'speech'(Web Speech) | 'whisper'
+let inputMode = SR ? 'speech' : 'tap';
+
+function speak(text){
+  return new Promise(res=>{
+    if (!window.speechSynthesis){ res(); return; }
+    const u=new SpeechSynthesisUtterance(text); u.lang="en-US"; u.rate=0.95;
+    u.onend=res; u.onerror=res;
+    window.speechSynthesis.cancel(); window.speechSynthesis.speak(u);
+  });
+}
+
+/* ---- Whisper 녹음/변환 ---- */
+let mediaStream=null, mediaRecorder=null, chunks=[], recording=false, whisperReady=false;
+async function recStart(){
+  mediaStream = await navigator.mediaDevices.getUserMedia({audio:true});
+  mediaRecorder = new MediaRecorder(mediaStream); chunks=[];
+  mediaRecorder.ondataavailable = e=>{ if(e.data.size) chunks.push(e.data); };
+  mediaRecorder.start();
+}
+function recStopAndTranscribe(){
+  return new Promise((res)=>{
+    mediaRecorder.onstop = async ()=>{
+      try{
+        mediaStream.getTracks().forEach(t=>t.stop());
+        const blob=new Blob(chunks,{type:chunks[0]?.type||'audio/mp4'});
+        const buf=await blob.arrayBuffer();
+        const ctx=new (window.AudioContext||window.webkitAudioContext)();
+        const decoded=await ctx.decodeAudioData(buf);
+        const off=new OfflineAudioContext(1, Math.max(1,Math.ceil(decoded.duration*16000)), 16000);
+        const src=off.createBufferSource(); src.buffer=decoded; src.connect(off.destination); src.start();
+        const rendered=await off.startRendering();
+        const text=await window.whisperTranscribe(rendered.getChannelData(0));
+        res(text);
+      }catch(e){ res(""); }
+    };
+    mediaRecorder.stop();
+  });
+}
+
+/* ============================================================
+   4) 진행 엔진
+   ============================================================ */
+let VARS={}, idx=0, listening=false;
+const $ = s => document.querySelector(s);
+const logEl=$("#log"), hintBox=$("#hintBox"), hintText=$("#hintText"), heardEl=$("#heard"),
+      micBtn=$("#micBtn"), whisperBtn=$("#whisperBtn"), statusEl=$("#status"),
+      progressEl=$("#progress"), phaseEl=$("#phaseName"), doneEl=$("#done"),
+      atisEl=$("#atis"), modeNoteEl=$("#modeNote");
+
+function renderVars(){
+  const show=["RWY","INFO","ALTIM","WDIR","WSPD","RADIAL","MILE","TAXIVIA"];
+  $("#vars").innerHTML = show.map(k=>`<span class="v"><b>${k}</b> ${VARS[k]}</span>`).join("");
+}
+function addMsg(who,text){
+  const d=document.createElement("div"); d.className="msg "+who;
+  d.innerHTML=`<div class="who">${who==='atc'?'ATC (관제)':'YOU (PILOT)'}</div>${text}`;
+  logEl.appendChild(d); d.scrollIntoView({behavior:"smooth",block:"end"});
+}
+function setProgress(){ progressEl.textContent=`${Math.min(idx,SCRIPT.length)} / ${SCRIPT.length}`; }
+function setPhase(i){ for(let j=i;j>=0;j--){ if(SCRIPT[j].p){ phaseEl.textContent=SCRIPT[j].p; return; } } }
+
+function matched(spoken,kw){
+  const t=spoken.toLowerCase();
+  const hit=kw.filter(k=>t.includes(k.toLowerCase())).length;
+  return hit>=Math.max(1,Math.ceil(kw.length*0.4));
+}
+
+function micLabel(){
+  if (inputMode==='tap')    micBtn.textContent="✔ 말했어요 ▶";
+  else if (inputMode==='whisper') micBtn.textContent = recording ? "⏹ 인식 (탭)" : "🎙 녹음 (탭)";
+  else                      micBtn.textContent = listening ? "⏹ 듣는 중…" : "🎤 말하기";
+}
+
+async function run(){
+  if (idx>=SCRIPT.length){ finish(); return; }
+  const step=SCRIPT[idx]; setPhase(idx);
+  const text=applyVars(step.text,VARS);
+  if (step.who==='atc'){
+    hintBox.style.display="none"; statusEl.textContent="ATC 송신 중…";
+    addMsg('atc',text); await speak(text);
+    idx++; setProgress(); run();
+  } else {
+    hintBox.style.display="block";
+    hintText.innerHTML=text.replace(/([0-9][0-9.,]*|\b[0-9]{2,3}[A-Z]?\b|\b[A-Z][0-9]\b)/g,m=>`<em>${m}</em>`);
+    heardEl.textContent="";
+    micLabel();
+    statusEl.textContent = inputMode==='tap' ? "당신 차례 — 대사 읽고 ✔ 탭"
+                         : inputMode==='whisper' ? "당신 차례 — 🎙 녹음 후 다시 탭"
+                         : "당신 차례 — 🎤 눌러 말하세요";
+  }
+}
+function advancePilot(spoken){ addMsg('me', spoken||"(음성)"); idx++; setProgress(); run(); }
+function finish(){ hintBox.style.display="none"; doneEl.style.display="block"; statusEl.textContent="완료"; }
+
+/* ---- Web Speech 실시간 ---- */
+function startListening(){
+  const step=SCRIPT[idx]; if(!step||step.who!=='pilot') return;
+  try{ recog.start(); }catch(e){}
+  listening=true; micBtn.classList.add("rec"); micLabel();
+}
+function stopListening(){
+  if (recog) try{ recog.stop(); }catch(e){}
+  listening=false; micBtn.classList.remove("rec"); micLabel();
+}
+if (recog){
+  recog.onresult=(e)=>{
+    let txt=""; for(const r of e.results) txt+=r[0].transcript;
+    heardEl.textContent="들린 말: "+txt;
+    const step=SCRIPT[idx];
+    if (step && step.who==='pilot'){
+      const alts=[]; for(const r of e.results) for(const a of r) alts.push(a.transcript);
+      if (alts.some(a=>matched(a,step.kw)) && e.results[e.results.length-1].isFinal){
+        stopListening(); advancePilot(txt);
+      }
+    }
+  };
+  recog.onend=()=>{ if(listening){ try{recog.start();}catch(e){} } };
+  recog.onerror=()=>{};
+}
+
+/* ---- Whisper 푸시투토크 ---- */
+async function whisperToggle(){
+  const step=SCRIPT[idx]; if(!step||step.who!=='pilot') return;
+  if (!recording){
+    try{ await recStart(); }catch(e){ alert("마이크 권한이 필요합니다."); return; }
+    recording=true; micBtn.classList.add("rec"); micLabel();
+    statusEl.textContent="🎙 녹음 중… 복창 후 다시 탭";
+  } else {
+    recording=false; micBtn.classList.remove("rec"); micBtn.disabled=true;
+    statusEl.textContent="인식 중…"; micBtn.textContent="⏳ 인식 중…";
+    const txt=await recStopAndTranscribe();
+    micBtn.disabled=false; micLabel();
+    heardEl.textContent="들린 말: "+(txt||"(인식 실패)");
+    if (txt && matched(txt, step.kw)) advancePilot(txt);
+    else statusEl.textContent="인식이 안 맞아요 — 다시 🎙 하거나 건너뛰기";
+  }
+}
+
+/* ---- 버튼 ---- */
+micBtn.addEventListener("click", ()=>{
+  const step=SCRIPT[idx];
+  if (inputMode==='tap'){ if(step&&step.who==='pilot') advancePilot(applyVars(step.text,VARS)); return; }
+  if (inputMode==='whisper'){ whisperToggle(); return; }
+  listening?stopListening():startListening();
+});
+$("#skipBtn").addEventListener("click", ()=>{
+  const step=SCRIPT[idx];
+  if (step && step.who==='pilot'){ stopListening(); advancePilot(applyVars(step.text,VARS)); }
+});
+$("#restartBtn").addEventListener("click", start);
+$("#atisBtn").addEventListener("click", ()=>{
+  const t=atisText(VARS);
+  if (atisEl.style.display==="block"){ atisEl.style.display="none"; }
+  else { atisEl.textContent=t; atisEl.style.display="block"; speak(t); }
+});
+
+/* ---- Whisper 모델 켜기 ---- */
+whisperBtn.addEventListener("click", async ()=>{
+  whisperBtn.disabled=true;
+  modeNoteEl.textContent="🧠 음성인식 모델 다운로드 중… (최초 1회, 약 40MB)";
+  try{
+    await window.loadWhisper((p)=>{
+      if (p && p.status==='progress' && p.total){
+        const pct=Math.round(p.loaded/p.total*100);
+        modeNoteEl.textContent=`🧠 모델 다운로드 중… ${pct}%  (${(p.file||'').split('/').pop()})`;
+      }
+    });
+    whisperReady=true; inputMode='whisper';
+    whisperBtn.style.display="none"; micLabel();
+    modeNoteEl.textContent="🎙 버튼을 눌러 복창하고 다시 누르면 인식합니다. (키워드 일부만 맞아도 진행)";
+  }catch(e){
+    whisperBtn.disabled=false;
+    modeNoteEl.textContent="⚠ 모델 로드 실패 — 네트워크 확인 후 다시 시도하거나 탭 진행을 쓰세요.";
+  }
+});
+
+/* ---- 시작 게이트 (iOS 오디오 잠금 해제) ---- */
+$("#startGate").addEventListener("click", ()=>{
+  $("#startGate").style.display="none";
+  micBtn.style.display=""; $("#skipBtn").style.display=""; $("#restartBtn").style.display="";
+  micBtn.classList.add("primary");
+  if (inputMode!=='speech') whisperBtn.style.display="";   // 음성인식 없는 폰엔 Whisper 옵션 제공
+  modeNoteEl.textContent = inputMode==='speech'
+    ? "🎤 누르고 영어로 교신 → 키워드 일부만 맞아도 진행됩니다."
+    : "지금은 ✔ 탭 진행 모드입니다. 아이폰에서 음성인식을 원하면 ‘🧠 음성인식 켜기’를 누르세요.";
+  start();
+});
+
+function start(){
+  stopListening(); window.speechSynthesis && window.speechSynthesis.cancel();
+  recording=false; micBtn.classList.remove("rec");
+  VARS=makeVars(); idx=0;
+  logEl.innerHTML=""; doneEl.style.display="none"; atisEl.style.display="none";
+  renderVars(); setProgress(); setPhase(0); micLabel(); run();
+}
+// 최초 실행은 #startGate 탭에서
+</script>
+</body>
+</html>
