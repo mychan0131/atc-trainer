@@ -271,7 +271,7 @@ function atisText(v){
   if (a && a.real){
     return [
       `Cheongju International Airport information ${v.INFO}.`,
-      `Time ${a.time} zulu. Active runway ${v.RWY}.`,
+      `Time ${(a.time||'').slice(-4)} zulu. Active runway ${v.RWY}.`,
       `Wind ${v.WDIR} at ${v.WSPD}.`,
       visPhrase(a.visM)?`Visibility ${visPhrase(a.visM)}.`:``,
       wxPhrase(a.wx)?`Present weather ${wxPhrase(a.wx)}.`:``,
@@ -317,6 +317,7 @@ function toSpeech(t){
   t = t.replace(/(\d{3,4})\s*hectopascal/gi, (m,n)=> sd(n)+' hectopascal');
   t = t.replace(/\bVRB\b/g, 'variable');                               // 바람 가변
   t = t.replace(/\bwind\s+(\d{3})\s+at\s+(\d{1,2})/gi, (m,d,s)=> 'wind '+sd(d)+' at '+sd(s)); // 풍향풍속 개별
+  t = t.replace(/\b(\d{4})\s+zulu/gi, (m,n)=> sd(n)+' zulu');           // 시각 개별 (1413→one four one three)
   t = t.replace(/\b([A-Z])\b/g, (m,L)=> NATO[L]||L);                    // 남은 단독 대문자(정보코드 등)
   return t;
 }
