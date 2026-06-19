@@ -336,19 +336,22 @@ function speak(text){
   return new Promise(res=>{
     const ss=window.speechSynthesis;
     if(!ss || !text){ res(); return; }
-    const u=new SpeechSynthesisUtterance(text); u.lang="en-US"; u.rate=0.95;
-    const v=pickVoice(); if(v) u.voice=v;
-    let ka=null;
-    const done=()=>{ if(ka){clearInterval(ka);ka=null;} res(); };
-    u.onend=done; u.onerror=done;
-    const fire=()=>{
-      ss.speak(u);
-      try{ ss.resume(); }catch(e){}                 // Chrome 일시정지 상태 해제
-      ka=setInterval(()=>{ if(!ss.speaking){clearInterval(ka);ka=null;return;} ss.resume(); },9000); // 장문 끊김 방지
+    let started=false, retried=false, ka=null;
+    const fin=()=>{ if(ka){clearInterval(ka);ka=null;} res(); };
+    const build=()=>{
+      const u=new SpeechSynthesisUtterance(text); u.lang="en-US"; u.rate=0.95;
+      const v=pickVoice(); if(v) u.voice=v;
+      u.onstart=()=>{ started=true; };
+      u.onend=fin; u.onerror=fin;
+      window._cur=u;                                  // GC 방지
+      return u;
     };
-    // ★ Chrome 데스크톱 버그 회피: cancel() 직후 즉시 speak()하면 무시됨 → 말하는 중일 때만 취소+지연
-    if (ss.speaking || ss.pending){ try{ss.cancel();}catch(e){} setTimeout(fire,130); }
-    else fire();
+    try{ ss.cancel(); }catch(e){}
+    ss.speak(build()); try{ ss.resume(); }catch(e){}  // resume 킥(멈춘 엔진 깨움)
+    setTimeout(()=>{                                   // 350ms 내 시작 안 하면 1회 재시도
+      if(!started && !retried){ retried=true; try{ss.cancel();}catch(e){} ss.speak(build()); try{ss.resume();}catch(e){} }
+    },350);
+    ka=setInterval(()=>{ if(!ss.speaking){clearInterval(ka);ka=null;return;} try{ss.resume();}catch(e){} },5000); // 장문 끊김+멈춤 방지
   });
 }
 // 음성목록 미리 로드 (Chrome은 첫 호출 시 비어있음)
@@ -502,8 +505,14 @@ $("#ttsTest").addEventListener("click", ()=>{
   u.onstart=()=>{ modeNoteEl.textContent='▶ 시작됨 voice='+(v?v.name:'default'); };
   u.onerror=(e)=>{ modeNoteEl.textContent='⚠ error='+e.error; };
   u.onend=()=>{ modeNoteEl.textContent+=' ✓끝'; };
-  ss.speak(u);   // 클릭(제스처) 안에서 동기 호출, cancel/타임아웃 없음
-  modeNoteEl.textContent='호출직후 speaking='+ss.speaking+' pending='+ss.pending+' voice='+(v?v.name:'default');
+  let started=false;
+  u.addEventListener('start',()=>{started=true;});
+  try{ss.cancel();}catch(e){}
+  ss.speak(u); try{ss.resume();}catch(e){}
+  setTimeout(()=>{
+    ss.resume();
+    modeNoteEl.textContent='resume후 started='+started+' speaking='+ss.speaking+' voice='+(v?v.name:'default');
+  },500);
 });
 $("#atisBtn").addEventListener("click", ()=>{
   const t=atisText(VARS);
